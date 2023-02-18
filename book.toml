@@ -1,0 +1,9 @@
+[book]
+authors = ["Jineon Baek"]
+language = "en"
+multilingual = false
+src = "src"
+title = "How to Move a Sofa Around a Corner"
+
+[output.html]
+mathjax-support = true

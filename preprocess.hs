@@ -1,9 +1,9 @@
-#!/usr/bin/env stack
-{- stack script --resolver lts-20.11 --verbosity=info
-  --package process
-  --package pandoc
-  --package pandoc-types
-  --package text
+#!/usr/bin/env cabal
+{- cabal:
+build-depends: base
+  , pandoc >= 3.0
+  , pandoc-types >= 1.23
+  , text >= 1.2.5.0
 -}
 {-# LANGUAGE OverloadedStrings   #-}
 
@@ -18,8 +18,8 @@ readerOptions = def {
   readerExtensions = extensionsFromList [
     Ext_tex_math_dollars,
     Ext_raw_html,
-    Ext_strikeout
-    -- ,Ext_wikilinks_title_after_pipe
+    Ext_strikeout,
+    Ext_wikilinks_title_after_pipe
   ]
 }
 
@@ -42,8 +42,8 @@ changeInlineList l = l >>= changeInline
 
 changeInline :: Inline -> [Inline]
 -- Replace LaTeX
-changeInline (Math InlineMath txt) = return (Str ("\\(" <> txt <> "\\)"))
-changeInline (Math DisplayMath txt) = return (Str ("\\[" <> txt <> "\\]"))
+changeInline (Math InlineMath txt) = return (Str ("\\\\(" <> txt <> "\\\\)"))
+changeInline (Math DisplayMath txt) = return (Str ("\\\\[" <> txt <> "\\\\]"))
 -- Do not touch anything else
 changeInline x = [x]
 

@@ -24,7 +24,7 @@ readerOptions = def {
 }
 
 readText :: Text -> PandocIO Pandoc
-readText = readMarkdown readerOptions
+readText = readCommonMark readerOptions
 
 writerOptions :: WriterOptions
 writerOptions = def {
@@ -35,7 +35,7 @@ writerOptions = def {
 }
 
 writeText :: Pandoc -> PandocIO Text
-writeText = writeMarkdown writerOptions
+writeText = writeCommonMark writerOptions
 
 changeInlineList :: [Inline] -> [Inline]
 changeInlineList l = l >>= changeInline

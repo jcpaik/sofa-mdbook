@@ -1,5 +1,5 @@
 book
-src
+src/
 
 preprocess.hi
 preprocess.o

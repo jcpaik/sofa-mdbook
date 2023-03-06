@@ -12,10 +12,17 @@ import Turtle (FilePath)
 changeInlineList :: [Inline] -> [Inline]
 changeInlineList l = l >>= changeInline
 
+-- mdbook only understands things well when all the characters are escaped
+escapeSymbols :: Text -> Text
+escapeSymbols text = 
+  let escapes = ["{", "}", "_", "\\"] 
+      add ch = T.replace ch ("\\" <> ch) 
+      maps = map add escapes in
+  foldr ($) text maps
+
 changeInline :: Inline -> [Inline]
--- Replace LaTeX
-changeInline (Math InlineMath txt) = return (Str ("\\\\(" <> txt <> "\\\\)"))
-changeInline (Math DisplayMath txt) = return (Str ("\\\\[" <> txt <> "\\\\]"))
+-- Inline all special symbols in the formula
+changeInline (Math t txt) = return $ Math t (escapeSymbols txt)
 -- Do not touch anything else
 changeInline x = [x]
 

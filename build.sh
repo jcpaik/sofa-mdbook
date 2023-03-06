@@ -1,4 +1,4 @@
 set -e
-cabal run --verbose=0 preprocess.hs < sample.md > src/sample.md
+mathmd vault src
 mdbook build
 mdbook serve

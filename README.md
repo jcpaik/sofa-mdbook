@@ -1,3 +1,1 @@
-# Setup
-
-Haskell Stack Version 2.9.1
+This is the repository for hosting compiled book

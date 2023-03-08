@@ -19,15 +19,3 @@ readerOptions = def {
 readText :: Text -> PandocIO Pandoc
 readText = readMarkdown readerOptions
 
-writerOptions :: WriterOptions
-writerOptions = def {
-  writerExtensions = extensionsFromList [
-    Ext_tex_math_double_backslash,
-    Ext_raw_html,
-    Ext_strikeout
-  ],
-  writerWrapText = WrapPreserve
-}
-
-writeText :: Pandoc -> PandocIO Text
-writeText = writeMarkdown writerOptions

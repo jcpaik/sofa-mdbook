@@ -1,5 +1,5 @@
 module Process where
-import Text.Pandoc
+import Text.Pandoc hiding (trace)
 import Text.Pandoc.Walk (walk)
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -8,11 +8,21 @@ import Preprocess (filterComments)
 import ReadWrite (readText)
 import Turtle (FilePath)
 import Control.Monad ((>=>))
-import Debug.Trace (trace, traceShowId)
+import Debug.Trace (trace, traceShow, traceShowId)
 
 data TheoremEnvType =
   Theorem | Lemma | Definition | Corollary | Remark | FigureEnv
   deriving (Eq, Enum, Show)
+
+theoremEnvTypeText :: TheoremEnvType -> Text
+theoremEnvTypeText t = 
+  case t of
+    Theorem -> "Theorem"
+    Lemma -> "Lemma"
+    Definition -> "Definition"
+    Corollary -> "Corollary"
+    Remark -> "Remark"
+    FigureEnv -> "Figure"
 
 -- "Theorem" -> Just Theorem
 parseTheoremEnvType :: Text -> Maybe TheoremEnvType
@@ -125,15 +135,6 @@ mdBookProcessEquation t txt =
         maps = map add escapes in
     foldr ($) text maps
 
-mdBookTheoremEnvTypeText :: TheoremEnvType -> Text
-mdBookTheoremEnvTypeText t = 
-  case t of
-    Theorem -> "Theorem"
-    Lemma -> "Lemma"
-    Definition -> "Definition"
-    Corollary -> "Corollary"
-    Remark -> "Remark"
-    FigureEnv -> "Figure"
 
 mdBookProcessTheoremEnv :: TheoremEnv -> [Block]
 mdBookProcessTheoremEnv (TheoremEnv
@@ -142,7 +143,7 @@ mdBookProcessTheoremEnv (TheoremEnv
   , theoremEnvDescription = desc }) =
     return $ BlockQuote (firstPara : restBlocks) where
       Para restFirstPara : restBlocks = desc
-      typeText = mdBookTheoremEnvTypeText typ
+      typeText = theoremEnvTypeText typ
       tagText = "[" <> tag <> "]."
       header = Strong [ Str typeText , Space , Str tagText ]
       firstPara = Para (header : Space : restFirstPara)
@@ -216,13 +217,20 @@ latexProcessTheoremEnv TheoremEnv
   } = [envStart] ++ envDesc ++ [envEnd] where
     envName = latexTheoremEnvTypeName envType
     envStart = Plain [RawInline "tex" $ "\\begin{" <> envName <> "}"]
-    envEnd = Plain [RawInline "tex" $ "\\end{" <> envName <> "}"]
+    envLabel = "\\label{" <> latexTheoremEnvTypeHeader envType <> 
+               envTag <> "}\n"
+    envEndTex = envLabel <> "\\end{" <> envName <> "}"
+    envEnd = Plain [RawInline "tex" envEndTex]
 
 latexProcessImage :: Attr -> [Inline] -> Target -> Inline
 latexProcessImage = Image
 
 latexProcessLink :: Attr -> [Inline] -> Target -> Inline
-latexProcessLink = Link
+-- For single-valued wikilinks, just make a smart link.
+latexProcessLink _ [Str tag] (desc, wikilink) | tag == desc =
+  RawInline "tex" "Theorem \\ref{thm:todo-make-it-work}"
+latexProcessLink att inl tar = traceShow (att, inl, tar) 
+  Str "TODO: make links work"
 
 latexWriteText :: Pandoc -> PandocIO Text
 latexWriteText = writeLaTeX options where

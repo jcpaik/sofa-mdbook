@@ -9,6 +9,7 @@ import ReadWrite (readText)
 import Turtle (FilePath)
 import Control.Monad ((>=>))
 import Debug.Trace (trace, traceShow, traceShowId)
+import Data.Maybe (isJust)
 
 data TheoremEnvType =
   Theorem | Lemma | Definition | Corollary | Remark | FigureEnv
@@ -23,6 +24,16 @@ theoremEnvTypeText t =
     Corollary -> "Corollary"
     Remark -> "Remark"
     FigureEnv -> "Figure"
+
+theoremEnvTypeTagText :: TheoremEnvType -> Text
+theoremEnvTypeTagText t = 
+  case t of
+    Theorem -> "thm"
+    Lemma -> "lem"
+    Definition -> "def"
+    Corollary -> "cor"
+    Remark -> "rem"
+    FigureEnv -> "fig"
 
 -- "Theorem" -> Just Theorem
 parseTheoremEnvType :: Text -> Maybe TheoremEnvType
@@ -47,6 +58,23 @@ data TheoremEnv = TheoremEnv
 -- "[some-thm-name]." -> Just "some-thm-name"
 parseTheoremEnvTag :: Text -> Maybe Text
 parseTheoremEnvTag = T.stripPrefix "[" >=> T.stripSuffix "]."
+
+-- "#^thm-some-theorem" -> ("", Theorem, "some-theorem")
+-- "05. Definitions/asdf/asdf#^thm-asdf" -> ("05. Definitions/asdf/asdf", Theorem, "asdf")
+parseTheoremEnvLink :: Text -> Maybe (Text, TheoremEnvType, Text)
+parseTheoremEnvLink text = 
+  if length tokens /= 2 then Nothing else
+    Just (addr, thmType, tagBody) where
+      tokens = T.splitOn "#^" text
+      [addr, tag] = tokens
+      (tagHead, tagBody) = T.splitAt 4 tag
+      thmType = case tagHead of 
+        "thm-" -> Theorem
+        "lem-" -> Lemma
+        "def-" -> Definition
+        "cor-" -> Corollary
+        "rem-" -> Remark
+        "fig-" -> FigureEnv
 
 clearTags :: [Inline] -> [Inline]
 clearTags [] = []
@@ -186,27 +214,15 @@ latexTheoremEnvTypeName t =
     Remark -> "remark"
     FigureEnv -> "figure"
 
-latexTheoremEnvTypeHeader :: TheoremEnvType -> Text
-latexTheoremEnvTypeHeader t = 
-  case t of
-    Theorem -> "thm:"
-    Lemma -> "lem:"
-    Definition -> "def:"
-    Corollary -> "cor:"
-    Remark -> "rem:"
-    FigureEnv -> "fig:"
-
 latexProcessTheoremEnv :: TheoremEnv -> [Block]
 -- Handle figures separately
 latexProcessTheoremEnv (TheoremEnv FigureEnv envTag envDesc) = 
   [Para $ [envStart] ++ inlines ++ [envEnd]] where
     envStartTex = "\\begin{figure}\n\\centering\n\\caption{"
     envStart = RawInline "tex" envStartTex
-
     -- Figure environment should have only one paragraph for description
     [Para inlines] = envDesc
-
-    label = "}\\label{fig:" <> envTag <> "}\n"
+    label = "}\n\\label{fig:" <> envTag <> "}\n"
     envEndTex = label <> "\\end{figure}"
     envEnd = RawInline "tex" envEndTex
 latexProcessTheoremEnv TheoremEnv
@@ -217,7 +233,7 @@ latexProcessTheoremEnv TheoremEnv
   } = [envStart] ++ envDesc ++ [envEnd] where
     envName = latexTheoremEnvTypeName envType
     envStart = Plain [RawInline "tex" $ "\\begin{" <> envName <> "}"]
-    envLabel = "\\label{" <> latexTheoremEnvTypeHeader envType <> 
+    envLabel = "\\label{" <> theoremEnvTypeTagText envType <> ":" <>
                envTag <> "}\n"
     envEndTex = envLabel <> "\\end{" <> envName <> "}"
     envEnd = Plain [RawInline "tex" envEndTex]
@@ -227,10 +243,21 @@ latexProcessImage = Image
 
 latexProcessLink :: Attr -> [Inline] -> Target -> Inline
 -- For single-valued wikilinks, just make a smart link.
-latexProcessLink _ [Str tag] (desc, wikilink) | tag == desc =
-  RawInline "tex" "Theorem \\ref{thm:todo-make-it-work}"
-latexProcessLink att inl tar = traceShow (att, inl, tar) 
-  Str "TODO: make links work"
+latexProcessLink attr [Str desc] (target, "wikilink") | 
+  desc == target && isJust (parseTheoremEnvLink target) =
+  let Just (path, envType, envName) = parseTheoremEnvLink target
+      thmTypeText = theoremEnvTypeText envType
+      thmRefText = theoremEnvTypeTagText envType <> ":" <> envName in
+      RawInline "tex" $ "\\Cref{" <> thmRefText <> "}"
+-- For wikilinks with title, do "title (reference)"
+latexProcessLink attr [Str desc] (target, "wikilink") | 
+  isJust (parseTheoremEnvLink target) =
+  let Just (path, envType, envName) = parseTheoremEnvLink target
+      thmTypeText = theoremEnvTypeText envType
+      thmRefText = theoremEnvTypeTagText envType <> ":" <> envName in
+      RawInline "tex" $ desc <> " (\\Cref{" <> thmRefText <> "})"
+-- Leave rest intact
+latexProcessLink attr desc target = Link attr desc target
 
 latexWriteText :: Pandoc -> PandocIO Text
 latexWriteText = writeLaTeX options where

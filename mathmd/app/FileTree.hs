@@ -2,13 +2,21 @@ module FileTree where
 import Data.List ( sortOn )
 import Turtle hiding ( sortOn )
 import qualified Control.Foldl as F
-import System.FilePath (pathSeparator, takeFileName)
+import System.FilePath (pathSeparator, takeFileName, takeBaseName)
 import Data.Maybe ( catMaybes ) 
 
 data Tree a =
       File { path :: a }
     | Directory { path :: a, children :: [Tree a] }
     deriving Foldable
+
+isFile :: Tree a -> Bool
+isFile (File _) = True
+isFile (Directory _ _) = False
+
+isDirectory :: Tree a -> Bool
+isDirectory (Directory _ _) = True
+isDirectory (File _) = False
 
 -- stole from containers
 foldTree :: (a -> b) -> (a -> [b] -> b) -> Tree a -> b
@@ -39,6 +47,9 @@ filePath = headTree
 fileName :: FileTree -> FilePath
 fileName x = takeFileName (filePath x)
 
+fileBaseName :: FileTree -> FilePath
+fileBaseName x = takeBaseName (filePath x)
+
 lsTree :: FilePath -> IO FileTree
 lsTree src = do
   isDir <- testdir src
@@ -62,17 +73,27 @@ stripPrefixDir dir path =
       fallback = stripPrefix (dir <> [System.FilePath.pathSeparator]) path in
   attempt <|> fallback
 
-mapCpTree :: (FilePath -> FilePath -> IO ()) -> FileTree -> FilePath -> IO ()
--- transverse the source tree, copy the directory structure
--- to `dst` directory and instead of copying files in src right to dst
--- apply the map `f` from source file to corresponding destination file
-mapCpTree f srcTree dst = do
-  mapM_ work srcTree
-    where work srcPath = let  src = filePath srcTree
-                              Just relPath = stripPrefixDir src srcPath
-                              dstPath = dst </> relPath in
-                              do
-                                isDir <- testdir srcPath
-                                when isDir $ mktree dstPath
-                                isFile <- testfile srcPath
-                                when isFile $ f srcPath dstPath
+{-
+mapCpTree f srcTree dst
+
+Copies the srcTree to dst. But instead of directly copying the files, 
+applies f to generate the target file.
+
+f srcSubTree dst takes the source subtree, target location (whether it be a file or directory)
+and does some action.
+
+Tree construction is done from root to leaves, but f is applied from leaves to root.
+-}
+mapCpTree :: (FileTree -> FilePath -> IO ()) -> FileTree -> FilePath -> IO ()
+mapCpTree f srcTree = mapCpTree' f (filePath srcTree) srcTree
+
+mapCpTree' :: (FileTree -> FilePath -> IO ()) -> FilePath -> FileTree -> FilePath -> IO ()
+mapCpTree' f srcRoot srcSubTree dst = 
+  let srcSubPath = filePath srcSubTree
+      Just relPath = stripPrefixDir srcRoot srcSubPath
+      dstPath = dst </> relPath in
+  case srcSubTree of
+    File _ -> f srcSubTree dstPath
+    Directory srcPath children -> do
+      mktree dstPath
+      mapM_ (\t -> mapCpTree' f srcRoot t dst) children

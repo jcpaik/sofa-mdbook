@@ -1,15 +1,19 @@
 module Process where
-import Text.Pandoc hiding (trace)
+import Text.Pandoc hiding (trace, FileTree)
 import Text.Pandoc.Walk (walk)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import Preprocess (filterComments)
 import ReadWrite (readText)
-import Turtle (FilePath)
+import Turtle (FilePath, testdir)
 import Control.Monad ((>=>))
 import Debug.Trace (trace, traceShow, traceShowId)
 import Data.Maybe (isJust)
+import FileTree
+import Summary
+import System.FilePath ((</>), replaceExtension, takeBaseName)
+import Data.List (isPrefixOf)
 
 data TheoremEnvType =
   Theorem | Lemma | Definition | Corollary | Remark | FigureEnv
@@ -90,14 +94,14 @@ theoremEnv (BlockQuote
       envType <- parseTheoremEnvType typeStr
       envTag <- parseTheoremEnvTag nameStr
       -- Reject any figure captions with more than single paragraph
-      if envType == FigureEnv && restBlocks /= [] then Nothing 
+      if envType == FigureEnv && restBlocks /= [] then Nothing
       else Just TheoremEnv
         {
           theoremEnvType = envType
         , theoremEnvTag = envTag
         , theoremEnvDescription = tagRemoved
         }
-      where 
+      where
         quoted = Para restFirstPara : restBlocks
         tagRemoved = walk clearTags quoted
 theoremEnv _ = Nothing
@@ -108,7 +112,15 @@ data Processor = Processor
     , processTheoremEnv    :: TheoremEnv -> [Block]
     , processImage         :: Attr -> [Inline] -> Target -> Inline
     , processLink          :: Attr -> [Inline] -> Target -> Inline
-    , writeText            :: Pandoc -> PandocIO Text
+    -- Translate a .md file to corresponding file.
+    , processFile          :: Pandoc -> PandocIO Text
+    -- Translate a directory to a file. Gets dstTree.
+    , processDirectory     :: FileTree -> Maybe Text
+    -- Given the file tree, generate some summary file
+    -- For mdbook, a `SUMMARY.md` file
+    -- For LaTeX, a `main.tex` file
+    , processSummary       :: FileTree -> FilePath -> IO ()
+    , processExtension     :: String
     }
 
 processPandoc :: Processor -> Pandoc -> Pandoc
@@ -125,23 +137,41 @@ processPandoc (Processor {
       procLink attr desc target
     inlineWalker x = x
 
-    blockWalker blocks = [outBlock | 
+    blockWalker blocks = [outBlock |
       block <- blocks, outBlock <- expandBlock block]
-    expandBlock block = maybe [block] 
+    expandBlock block = maybe [block]
       procTheoremEnv (theoremEnv block)
 
-processText :: Processor -> Text -> IO Text
-processText processor text =
+processFileWithPreprocess :: Processor -> Text -> IO Text
+processFileWithPreprocess processor text =
   let filtered = filterComments text in runIOorExplode (do
     readPandoc <- readText filtered
     let writePandoc = processPandoc processor readPandoc in
-      writeText processor writePandoc)
+      processFile processor writePandoc)
 
+processFileTree :: Processor -> FileTree -> FilePath -> IO ()
+processFileTree processor (File filePath) dst = do
+  text <- TIO.readFile filePath
+  processed <- processFileWithPreprocess processor text
+  TIO.writeFile (replaceExtension dst (processExtension processor)) processed
+processFileTree processor (Directory dirPath children) dst = do
+  dstTree <- lsTree dst
+  case processDirectory processor dstTree of
+    Nothing -> return ()
+    Just text -> TIO.writeFile dst text
+
+-- Main function that transpiles a single file or directory
 transpile :: Processor -> FilePath -> FilePath -> IO ()
-transpile processor srcFile dstFile = do
-  text <- TIO.readFile srcFile
-  processed <- processText processor text
-  TIO.writeFile dstFile processed
+transpile processor src dst = do
+  isSrcDir <- testdir src
+  if isSrcDir then do
+    srcTreeRaw <- lsTree src
+    let srcTree = genSummaryTree srcTreeRaw in do
+      mapCpTree (processFileTree processor) srcTree dst
+      processSummary processor srcTree dst
+  else do
+    srcTreeRaw <- lsTree src
+    mapCpTree (processFileTree processor) srcTreeRaw dst
 
 mdBookProcessor :: Processor
 mdBookProcessor = Processor
@@ -150,7 +180,10 @@ mdBookProcessor = Processor
   , processTheoremEnv = mdBookProcessTheoremEnv
   , processImage = Image
   , processLink = Link
-  , writeText = mdBookWriteText
+  , processFile = mdBookProcessFile
+  , processDirectory = const Nothing
+  , processSummary = mdBookProcessSummary
+  , processExtension = ".md"
   }
 
 -- mdbook only understands things well when all the characters are escaped
@@ -163,6 +196,15 @@ mdBookProcessEquation t txt =
         maps = map add escapes in
     foldr ($) text maps
 
+mdBookTheoremEnvTypeText :: TheoremEnvType -> Text
+mdBookTheoremEnvTypeText t =
+  case t of
+    Theorem -> "Theorem"
+    Lemma -> "Lemma"
+    Definition -> "Definition"
+    Corollary -> "Corollary"
+    Remark -> "Remark"
+    FigureEnv -> "Figure"
 
 mdBookProcessTheoremEnv :: TheoremEnv -> [Block]
 mdBookProcessTheoremEnv (TheoremEnv
@@ -176,8 +218,8 @@ mdBookProcessTheoremEnv (TheoremEnv
       header = Strong [ Str typeText , Space , Str tagText ]
       firstPara = Para (header : Space : restFirstPara)
 
-mdBookWriteText :: Pandoc -> PandocIO Text
-mdBookWriteText = writeMarkdown options where
+mdBookProcessFile :: Pandoc -> PandocIO Text
+mdBookProcessFile = writeMarkdown options where
   options = def {
     writerExtensions = extensionsFromList [
       Ext_tex_math_double_backslash,
@@ -187,6 +229,25 @@ mdBookWriteText = writeMarkdown options where
     writerWrapText = WrapPreserve
   }
 
+mdBookProcessSummary :: FileTree -> FilePath -> IO ()
+mdBookProcessSummary tree dst =
+  let txt = mdBookGenSummary tree dst in
+    TIO.writeFile (dst </> "SUMMARY.md") txt
+
+-- From the summary tree, generate contenst of SUMMARY.md
+mdBookGenSummary :: FileTree -> FilePath -> Text
+mdBookGenSummary tree dst = T.unlines lines where
+  Directory src roots = tree
+  lines = [line | root <- roots, line <- loop 0 root]
+
+  replaceTop dir =
+    let Just relDir = stripPrefixDir src dir in relDir
+  loop depth (File path) = [displayMarkdownFile depth $ replaceTop path]
+  loop depth (Directory path children) =
+    -- TODO: Locate preface if any
+    displayDir depth (replaceTop path) :
+      [line | child <- children, line <- loop (depth + 1) child]
+
 latexProcessor :: Processor
 latexProcessor = Processor
   {
@@ -194,18 +255,21 @@ latexProcessor = Processor
   , processTheoremEnv = latexProcessTheoremEnv
   , processImage = latexProcessImage
   , processLink = latexProcessLink
-  , writeText = latexWriteText
+  , processFile = latexProcessFile
+  , processDirectory = latexProcessDirectory
+  , processSummary = \a b -> return ()
+  , processExtension = ".tex"
   }
 
 latexProcessEquation :: MathType -> Text -> Inline
 -- fall back to raw inline if the equation has any \begin{ - \end{ inside
-latexProcessEquation DisplayMath txt | 
-  T.isInfixOf "\\begin{" txt && T.isInfixOf "\\end{" txt = 
+latexProcessEquation DisplayMath txt |
+  T.isInfixOf "\\begin{" txt && T.isInfixOf "\\end{" txt =
     RawInline "latex" txt
 latexProcessEquation mt t = Math mt t
 
 latexTheoremEnvTypeName :: TheoremEnvType -> Text
-latexTheoremEnvTypeName t = 
+latexTheoremEnvTypeName t =
   case t of
     Theorem -> "theorem"
     Lemma -> "lemma"
@@ -214,9 +278,19 @@ latexTheoremEnvTypeName t =
     Remark -> "remark"
     FigureEnv -> "figure"
 
+latexTheoremEnvTypeHeader :: TheoremEnvType -> Text
+latexTheoremEnvTypeHeader t =
+  case t of
+    Theorem -> "thm:"
+    Lemma -> "lem:"
+    Definition -> "def:"
+    Corollary -> "cor:"
+    Remark -> "rem:"
+    FigureEnv -> "fig:"
+
 latexProcessTheoremEnv :: TheoremEnv -> [Block]
 -- Handle figures separately
-latexProcessTheoremEnv (TheoremEnv FigureEnv envTag envDesc) = 
+latexProcessTheoremEnv (TheoremEnv FigureEnv envTag envDesc) =
   [Para $ [envStart] ++ inlines ++ [envEnd]] where
     envStartTex = "\\begin{figure}\n\\centering\n\\caption{"
     envStart = RawInline "tex" envStartTex
@@ -259,8 +333,8 @@ latexProcessLink attr [Str desc] (target, "wikilink") |
 -- Leave rest intact
 latexProcessLink attr desc target = Link attr desc target
 
-latexWriteText :: Pandoc -> PandocIO Text
-latexWriteText = writeLaTeX options where
+latexProcessFile :: Pandoc -> PandocIO Text
+latexProcessFile = writeLaTeX options where
   options = def {
     writerExtensions = extensionsFromList [
       Ext_tex_math_dollars,
@@ -270,3 +344,14 @@ latexWriteText = writeLaTeX options where
     ],
     writerWrapText = WrapPreserve
   }
+
+latexProcessDirectory :: FileTree -> Maybe Text
+latexProcessDirectory (Directory dirPath children) = Just $
+  T.unlines l where
+    outPath = dirPath </> ".tex"
+    -- TODO: get the right child names
+    childPaths = map (\x -> replaceExtension (filePath x) ".tex") children
+    lineOf p | "00. " `isPrefixOf` p = "\\input{" <> T.pack p <> "}"
+    -- TODO: change subsection to something according to depth
+    lineOf p = "\\subsection{" <> T.pack (takeBaseName p) <> "}\n\\input{" <> T.pack p <> "}"
+    l = map lineOf childPaths

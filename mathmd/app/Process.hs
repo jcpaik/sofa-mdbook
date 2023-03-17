@@ -108,7 +108,8 @@ theoremEnv _ = Nothing
 
 data Processor = Processor
     {
-      processEquation      :: MathType -> Text -> Inline
+      processPreprocess    :: Text -> Text
+    , processEquation      :: MathType -> Text -> Inline
     , processTheoremEnv    :: TheoremEnv -> [Block]
     , processImage         :: Attr -> [Inline] -> Target -> Inline
     , processLink          :: Attr -> [Inline] -> Target -> Inline
@@ -144,7 +145,7 @@ processPandoc (Processor {
 
 processFileWithPreprocess :: Processor -> Text -> IO Text
 processFileWithPreprocess processor text =
-  let filtered = filterComments text in runIOorExplode (do
+  let filtered = processPreprocess processor text in runIOorExplode (do
     readPandoc <- readText filtered
     let writePandoc = processPandoc processor readPandoc in
       processFile processor writePandoc)
@@ -175,8 +176,9 @@ transpile processor src dst = do
 
 mdBookProcessor :: Processor
 mdBookProcessor = Processor
-  {
-    processEquation = mdBookProcessEquation
+  { 
+    processPreprocess = filterComments
+  , processEquation = mdBookProcessEquation
   , processTheoremEnv = mdBookProcessTheoremEnv
   , processImage = Image
   , processLink = Link
@@ -251,7 +253,8 @@ mdBookGenSummary tree dst = T.unlines lines where
 latexProcessor :: Processor
 latexProcessor = Processor
   {
-    processEquation = latexProcessEquation
+    processPreprocess = filterComments . latexExpandProof
+  , processEquation = latexProcessEquation
   , processTheoremEnv = latexProcessTheoremEnv
   , processImage = latexProcessImage
   , processLink = latexProcessLink
@@ -260,6 +263,10 @@ latexProcessor = Processor
   , processSummary = \a b -> return ()
   , processExtension = ".tex"
   }
+
+latexExpandProof :: Text -> Text
+latexExpandProof = (T.replace "_Proof._" "\\begin{proof}\n") .
+  (T.replace "□" "\n\\end{proof}\n")
 
 latexProcessEquation :: MathType -> Text -> Inline
 -- fall back to raw inline if the equation has any \begin{ - \end{ inside

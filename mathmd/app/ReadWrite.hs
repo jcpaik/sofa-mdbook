@@ -11,6 +11,7 @@ readerOptions = def {
   readerExtensions = extensionsFromList [
     Ext_tex_math_dollars,
     Ext_raw_html,
+    Ext_raw_tex,
     Ext_strikeout,
     Ext_wikilinks_title_after_pipe
   ]

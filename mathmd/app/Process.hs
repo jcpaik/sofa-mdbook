@@ -254,7 +254,7 @@ mdBookGenSummary tree dst = T.unlines lines where
 latexProcessor :: Processor
 latexProcessor = Processor
   {
-    processPreprocess = filterComments . latexExpandProof
+    processPreprocess = filterComments
   , processEquation = latexProcessEquation
   , processTheoremEnv = latexProcessTheoremEnv
   , processImage = latexProcessImage
@@ -264,10 +264,6 @@ latexProcessor = Processor
   , processSummary = \a b -> return ()
   , processExtension = ".tex"
   }
-
-latexExpandProof :: Text -> Text
-latexExpandProof = (T.replace "_Proof._" "\\begin{proof}\n") .
-  (T.replace "□" "\n\\end{proof}\n")
 
 latexProcessEquation :: MathType -> Text -> Inline
 -- fall back to raw inline if the equation has any \begin{ - \end{ inside
@@ -352,9 +348,12 @@ latexProcessFile pd = writeLaTeX options mpd where
     ],
     writerWrapText = WrapPreserve
   }
-  mpd = walk modHeader pd
+  mpd = walk modHeader (walk modProof pd)
   modHeader (Header n t xs) = (Header (n+2) t xs)
   modHeader x = x
+  modProof (Emph [Str "Proof."]) = RawInline "tex" "\\begin{proof}\n"
+  modProof (Str "□") = RawInline "tex" "\n\\end{proof}"
+  modProof x = x
 
 latexSections :: [Text]
 latexSections = ["chapter", "section", "subsection", "subsubsection"]

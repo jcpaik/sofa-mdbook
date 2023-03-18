@@ -1,1 +1,1 @@
-cabal run mathmd -- in.md out.md
+cabal run mathmd -- in out

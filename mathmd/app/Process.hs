@@ -12,15 +12,16 @@ import Debug.Trace (trace, traceShow, traceShowId)
 import Data.Maybe (isJust)
 import FileTree
 import Summary
-import System.FilePath ((</>), replaceExtension, takeBaseName)
+import System.FilePath ((</>), replaceExtension, takeBaseName, splitPath)
 import Data.List (isPrefixOf)
+import Data.List (isSuffixOf)
 
 data TheoremEnvType =
   Theorem | Lemma | Definition | Corollary | Remark | FigureEnv
   deriving (Eq, Enum, Show)
 
 theoremEnvTypeText :: TheoremEnvType -> Text
-theoremEnvTypeText t = 
+theoremEnvTypeText t =
   case t of
     Theorem -> "Theorem"
     Lemma -> "Lemma"
@@ -30,7 +31,7 @@ theoremEnvTypeText t =
     FigureEnv -> "Figure"
 
 theoremEnvTypeTagText :: TheoremEnvType -> Text
-theoremEnvTypeTagText t = 
+theoremEnvTypeTagText t =
   case t of
     Theorem -> "thm"
     Lemma -> "lem"
@@ -66,13 +67,13 @@ parseTheoremEnvTag = T.stripPrefix "[" >=> T.stripSuffix "]."
 -- "#^thm-some-theorem" -> ("", Theorem, "some-theorem")
 -- "05. Definitions/asdf/asdf#^thm-asdf" -> ("05. Definitions/asdf/asdf", Theorem, "asdf")
 parseTheoremEnvLink :: Text -> Maybe (Text, TheoremEnvType, Text)
-parseTheoremEnvLink text = 
+parseTheoremEnvLink text =
   if length tokens /= 2 then Nothing else
     Just (addr, thmType, tagBody) where
       tokens = T.splitOn "#^" text
       [addr, tag] = tokens
       (tagHead, tagBody) = T.splitAt 4 tag
-      thmType = case tagHead of 
+      thmType = case tagHead of
         "thm-" -> Theorem
         "lem-" -> Lemma
         "def-" -> Definition
@@ -159,7 +160,7 @@ processFileTree processor (Directory dirPath children) dst = do
   dstTree <- lsTree dst
   case processDirectory processor dstTree of
     Nothing -> return ()
-    Just text -> TIO.writeFile dst text
+    Just text -> TIO.writeFile (traceShowId $ dst <> (processExtension processor)) text
 
 -- Main function that transpiles a single file or directory
 transpile :: Processor -> FilePath -> FilePath -> IO ()
@@ -176,7 +177,7 @@ transpile processor src dst = do
 
 mdBookProcessor :: Processor
 mdBookProcessor = Processor
-  { 
+  {
     processPreprocess = filterComments
   , processEquation = mdBookProcessEquation
   , processTheoremEnv = mdBookProcessTheoremEnv
@@ -324,14 +325,14 @@ latexProcessImage = Image
 
 latexProcessLink :: Attr -> [Inline] -> Target -> Inline
 -- For single-valued wikilinks, just make a smart link.
-latexProcessLink attr [Str desc] (target, "wikilink") | 
+latexProcessLink attr [Str desc] (target, "wikilink") |
   desc == target && isJust (parseTheoremEnvLink target) =
   let Just (path, envType, envName) = parseTheoremEnvLink target
       thmTypeText = theoremEnvTypeText envType
       thmRefText = theoremEnvTypeTagText envType <> ":" <> envName in
       RawInline "tex" $ "\\Cref{" <> thmRefText <> "}"
 -- For wikilinks with title, do "title (reference)"
-latexProcessLink attr [Str desc] (target, "wikilink") | 
+latexProcessLink attr [Str desc] (target, "wikilink") |
   isJust (parseTheoremEnvLink target) =
   let Just (path, envType, envName) = parseTheoremEnvLink target
       thmTypeText = theoremEnvTypeText envType
@@ -341,7 +342,7 @@ latexProcessLink attr [Str desc] (target, "wikilink") |
 latexProcessLink attr desc target = Link attr desc target
 
 latexProcessFile :: Pandoc -> PandocIO Text
-latexProcessFile = writeLaTeX options where
+latexProcessFile pd = writeLaTeX options mpd where
   options = def {
     writerExtensions = extensionsFromList [
       Ext_tex_math_dollars,
@@ -351,14 +352,19 @@ latexProcessFile = writeLaTeX options where
     ],
     writerWrapText = WrapPreserve
   }
+  mpd = walk modHeader pd
+  modHeader (Header n t xs) = (Header (n+2) t xs)
+  modHeader x = x
+
+latexSections :: [Text]
+latexSections = ["chapter", "section", "subsection", "subsubsection"]
 
 latexProcessDirectory :: FileTree -> Maybe Text
 latexProcessDirectory (Directory dirPath children) = Just $
   T.unlines l where
-    outPath = dirPath </> ".tex"
-    -- TODO: get the right child names
-    childPaths = map (\x -> replaceExtension (filePath x) ".tex") children
+    childPaths = filter (isSuffixOf ".tex") $ map filePath children
     lineOf p | "00. " `isPrefixOf` p = "\\input{" <> T.pack p <> "}"
     -- TODO: change subsection to something according to depth
-    lineOf p = "\\subsection{" <> T.pack (takeBaseName p) <> "}\n\\input{" <> T.pack p <> "}"
+    lineOf p = let sectionName = latexSections !! (length (splitPath p) - 1) in
+      "\\" <> sectionName <> "{" <> (T.drop 4 $ T.pack (takeBaseName p)) <> "}\n\\input{" <> T.pack p <> "}"
     l = map lineOf childPaths

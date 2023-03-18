@@ -97,3 +97,4 @@ mapCpTree' f srcRoot srcSubTree dst =
     Directory srcPath children -> do
       mktree dstPath
       mapM_ (\t -> mapCpTree' f srcRoot t dst) children
+      f srcSubTree dstPath

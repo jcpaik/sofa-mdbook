@@ -15,6 +15,8 @@ import Summary
 import System.FilePath ((</>), replaceExtension, takeBaseName, splitPath)
 import Data.List (isPrefixOf)
 import Data.List (isSuffixOf)
+import Data.List (sortOn)
+import Text.Pandoc.Shared (stringify)
 
 data TheoremEnvType =
   Theorem | Lemma | Definition | Corollary | Remark | FigureEnv
@@ -153,14 +155,14 @@ processFileWithPreprocess processor text =
 
 processFileTree :: Processor -> FileTree -> FilePath -> IO ()
 processFileTree processor (File filePath) dst = do
-  text <- TIO.readFile filePath
+  text <- TIO.readFile $ traceShowId filePath
   processed <- processFileWithPreprocess processor text
   TIO.writeFile (replaceExtension dst (processExtension processor)) processed
 processFileTree processor (Directory dirPath children) dst = do
-  dstTree <- lsTree dst
-  case processDirectory processor dstTree of
+  dstTree <- lsTree (traceShowId dst)
+  case processDirectory processor $ sortTree dstTree of
     Nothing -> return ()
-    Just text -> TIO.writeFile (traceShowId $ dst <> (processExtension processor)) text
+    Just text -> TIO.writeFile (dst <> (processExtension processor)) text
 
 -- Main function that transpiles a single file or directory
 transpile :: Processor -> FilePath -> FilePath -> IO ()
@@ -321,19 +323,19 @@ latexProcessImage = Image
 
 latexProcessLink :: Attr -> [Inline] -> Target -> Inline
 -- For single-valued wikilinks, just make a smart link.
-latexProcessLink attr [Str desc] (target, "wikilink") |
-  desc == target && isJust (parseTheoremEnvLink target) =
+latexProcessLink attr desc (target, "wikilink") |
+  stringify desc == target && isJust (parseTheoremEnvLink target) =
   let Just (path, envType, envName) = parseTheoremEnvLink target
       thmTypeText = theoremEnvTypeText envType
       thmRefText = theoremEnvTypeTagText envType <> ":" <> envName in
       RawInline "tex" $ "\\Cref{" <> thmRefText <> "}"
 -- For wikilinks with title, do "title (reference)"
-latexProcessLink attr [Str desc] (target, "wikilink") |
+latexProcessLink attr desc (target, "wikilink") |
   isJust (parseTheoremEnvLink target) =
   let Just (path, envType, envName) = parseTheoremEnvLink target
       thmTypeText = theoremEnvTypeText envType
       thmRefText = theoremEnvTypeTagText envType <> ":" <> envName in
-      RawInline "tex" $ desc <> " (\\Cref{" <> thmRefText <> "})"
+      RawInline "tex" $ stringify desc <> " (\\Cref{" <> thmRefText <> "})"
 -- Leave rest intact
 latexProcessLink attr desc target = Link attr desc target
 
